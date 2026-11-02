@@ -21,7 +21,7 @@ Nếu `.env` đã tồn tại, giữ file hiện tại, không sao chép đè. M
 - API: http://127.0.0.1:3001/api/health
 - Database ứng dụng: `cineverse`; kiểm thử: `cineverse_test`.
 
-Đăng ký tài khoản → đặt tên/ngoại hình → lưu nhân vật → Phòng chiếu → tạo phòng → gửi link mời. Người được mời cần có tài khoản và nhân vật. Host dán URL video HTTP(S) trực tiếp tương thích trình duyệt; đây chưa phải dịch vụ upload/phát tệp riêng tư. Nguồn video có giới hạn đăng nhập/CORS/DRM có thể không phát được.
+Đăng ký tài khoản → đặt tên/ngoại hình → lưu nhân vật → Phòng chiếu → tạo phòng → gửi link mời. Người được mời cần có tài khoản và nhân vật. Host tải MP4/WebM vào thư viện, rồi bấm **Chiếu phim**. Có thể dùng URL HTTP(S) trực tiếp ở chế độ 2D; nguồn có giới hạn đăng nhập/CORS/DRM có thể không phát được.
 
 ## Đã triển khai
 
@@ -30,17 +30,20 @@ Nếu `.env` đã tồn tại, giữ file hiện tại, không sao chép đè. M
 - Tạo và lưu bốn loại phòng với số slot độc lập giới hạn người tham gia; preview 2D và sơ đồ 3D cơ bản. Ghế đôi có slot riêng và khung ghế chung.
 - Link mời có token ngẫu nhiên, token hash ở server; server xác thực quyền, tranh ghế atomic, host transfer và reconnect giữ ghế 30 giây.
 - Timeline phim server-authoritative, host play/pause/seek, hiệu chỉnh drift, bắt kịp khi vào lại và lịch sử tiến độ.
-- Voice WebRTC mesh, bật/tắt mic và tắt nghe; cấu hình STUN/TURN từ server. Chưa xác minh voice qua các mạng thực tế.
+- Thư viện phim theo tài khoản, upload theo luồng, giới hạn dung lượng, phát private có byte-range/HEAD. Người trong phòng chỉ được xem file đang được chọn; biết URL không thay thế quyền xem.
+- VideoTexture dùng cùng HTML video cho 2D/3D; camera toàn rạp/từ ghế/tập trung, reduced motion, đèn tối khi phát. Chế độ tập trung thu gọn điều khiển và có nút mở lại; Esc trở về 2D.
+- Avatar đi theo lối giữa và lối ngang đến ghế, có bước chân và tư thế ngồi. Ghế được giữ ngay khi server chấp nhận; không đổi chỗ giữa chặng. Reconnect tiếp tục từ mốc chuyển động server.
+- Voice WebRTC mesh, mute/deafen, chọn micro và loa voice trên trình duyệt hỗ trợ; cấu hình STUN/TURN từ server. Chưa xác minh phần cứng âm thanh hoặc thoại qua các mạng thực tế.
 - Lazy-load 3D, demand rendering, giới hạn DPR, bố cục responsive và thông báo lỗi media/WebGL.
 
 ## Giới hạn bản prototype
 
-- Avatar hiện đặt vào ghế ngay; chưa có đi bộ, pathfinding/collision, joystick hoặc animation ngồi hoàn chỉnh.
-- 3D hiện là sơ đồ rạp có nhân vật; phim phát qua HTML video 2D, chưa gắn VideoTexture lên màn hình rạp.
-- Chưa có spatial voice/ducking, chọn thiết bị audio, reactions hoặc tương tác Couple.
+- Di chuyển theo waypoint đến/ra ghế; chưa có đi tự do, joystick, va chạm avatar với nhau hoặc animation skeletal hoàn chỉnh.
+- VideoTexture áp dụng cho phim tự host. URL ngoài giữ phát 2D để tránh hỏng nguồn không hỗ trợ CORS. Codec trong MP4/WebM vẫn phải được trình duyệt hỗ trợ; chưa có transcode.
+- Chưa có spatial voice/ducking, reactions hoặc tương tác Couple. Chọn loa chỉ áp dụng voice; phim dùng đầu ra mặc định của trình duyệt.
 - Ngoại hình trang bị lưu trong JSONB có kiểm tra vật phẩm sở hữu. Chưa có cửa hàng, progression, nhiều nhân vật/tài khoản hoặc giao diện inventory riêng.
 - Phòng/cấu hình và lịch sử bền vững; danh sách online, ghế và timeline hiện tại nằm trong bộ nhớ. Server restart hoặc phòng không còn người sau grace period sẽ đặt lại phiên xem; lịch sử đã lưu vẫn còn.
-- Chưa có media upload/range delivery có phân quyền, backup tự động, HTTPS/reverse proxy hay triển khai Mac mini.
+- Chưa có quota tổng dung lượng từng tài khoản, xóa phim qua UI, backup tự động, HTTPS/reverse proxy hay triển khai Mac mini.
 - Chưa đo FPS trên điện thoại thật, chưa kiểm chứng voice/TURN hoặc video sync trên hai mạng khác nhau.
 
 ## Kiểm thử
@@ -55,6 +58,10 @@ npm run build
 Integration runner chỉ chấp nhận PostgreSQL localhost và buộc database `cineverse_test`, tạo database nếu thiếu, áp dụng migration/seed. Tài khoản QA ngẫu nhiên được dọn theo đúng ID sinh trong test. Không drop database và không ghi vào `cineverse`.
 
 ## Cấu trúc
+
+File phim mặc định nằm trong `media/` tại root, không public dưới static và bị Git bỏ qua. Có thể đặt `MEDIA_ROOT` và `MAX_MEDIA_BYTES` trong `.env` (mặc định 4 GiB/file). Database lưu metadata; backup/chuyển máy cần giữ cả PostgreSQL và thư mục media. Kiểm tra chữ ký container chỉ phát hiện file sai loại; player vẫn có thể báo codec không được hỗ trợ.
+
+Nếu cập nhật từ bản trước: chạy `npm run db:generate` và `npm run db:migrate` trước khi khởi động.
 
 ```text
 apps/web/          React, Three.js, UI, player, voice

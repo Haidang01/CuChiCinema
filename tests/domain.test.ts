@@ -5,8 +5,12 @@ import {
   generateLayout,
   roomSchema,
   type RoomRecord,
+  seatRoute,
+  motionDuration,
+  sampleMotion,
 } from '../packages/shared/src/index.js';
 import { RoomState } from '../apps/server/src/room-state.js';
+import { parseByteRange } from '../apps/server/src/media.js';
 
 const record: RoomRecord = {
   id: 'room',
@@ -56,19 +60,69 @@ test('participant limit is independent of seats, cannot exceed capacity', () => 
   state.join(person('c'));
   assert.throws(() => state.join(person('d')), /đủ người/);
 });
+test('single HTTP byte ranges handle suffix/open ends and reject malformed or unsafe requests', () => {
+  assert.equal(parseByteRange(undefined, 100), null);
+  assert.deepEqual(parseByteRange('bytes=10-19', 100), { start: 10, end: 19 });
+  assert.deepEqual(parseByteRange('bytes=90-', 100), { start: 90, end: 99 });
+  assert.deepEqual(parseByteRange('bytes=-10', 100), { start: 90, end: 99 });
+  assert.deepEqual(parseByteRange('bytes=0-999', 100), { start: 0, end: 99 });
+  for (const value of [
+    'bytes=-0',
+    'bytes=100-',
+    'bytes=20-10',
+    'bytes=0-1,3-4',
+    'bytes=-',
+    'items=0-1',
+    'bytes=90071992547409999-',
+  ])
+    assert.throws(() => parseByteRange(value, 100));
+  assert.throws(() => parseByteRange('bytes=0-', 0));
+});
 test('seat claim is atomic and failed switch preserves the original seat', () => {
   const state = new RoomState(record);
   state.join(person('a'));
   state.join(person('b'));
-  state.claim('a', 'A1');
-  state.claim('b', 'A2');
-  assert.throws(() => state.claim('b', 'A1'));
+  state.claim('a', 'A1', 0);
+  state.claim('b', 'A2', 0);
+  assert.throws(() => state.claim('b', 'A1', 100000));
   assert.equal(state.participants.get('b')?.seatId, 'A2');
-  state.claim('a', 'B1');
+  state.claim('a', 'B1', 100000);
   assert.equal(state.participants.get('a')?.seatId, 'B1');
   assert.throws(() => state.claim('b', 'Z99'));
-  state.claim('a', null);
+  state.claim('a', null, 200000);
   assert.equal(state.participants.get('a')?.seatId, null);
+});
+test('seat navigation uses clear aisles, reserves immediately and rejects mid-walk switches', () => {
+  for (const type of ['standard', 'vip', 'couple', 'lounge'] as const) {
+    const seats = generateLayout({ ...record, type, capacity: 12 });
+    for (const seat of seats) {
+      const path = seatRoute(seats, undefined, seat);
+      const motion = { path, startedAt: 1000, durationMs: motionDuration(path) };
+      assert.equal(sampleMotion(motion, 0).done, false);
+      assert.deepEqual(sampleMotion(motion, 100000).position, path.at(-1));
+      for (let step = 0; step <= 100; step++) {
+        const point = sampleMotion(motion, 1000 + (motion.durationMs * step) / 100).position;
+        for (const other of seats)
+          if (other.id !== seat.id)
+            assert.ok(
+              Math.abs(point[0] - other.x) > 0.76 || Math.abs(point[2] - other.z) > 0.7,
+              `Route crosses ${other.id}`,
+            );
+      }
+    }
+  }
+  const state = new RoomState(record);
+  state.join(person('a'));
+  state.claim('a', 'A1', 1000);
+  assert.equal(state.participants.get('a')?.seatId, 'A1');
+  assert.throws(() => state.claim('a', 'A2', 1001), /đang di chuyển/);
+  state.disconnect('a');
+  state.join(person('a'));
+  assert.ok(state.participants.get('a')?.motion);
+  state.finishMovement('a', 0);
+  assert.ok(state.participants.get('a')?.motion);
+  state.finishMovement('a', 1000);
+  assert.equal(state.participants.get('a')?.motion, null);
 });
 test('reconnect preserves a seat; expired/explicit leave frees it and transfers host', () => {
   const state = new RoomState(record);

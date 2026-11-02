@@ -1,4 +1,7 @@
 import type { Appearance } from '@cineverse/shared';
+import { useRef } from 'react';
+import { useFrame, useThree } from '@react-three/fiber';
+import type { Group } from 'three';
 
 export const palette = {
   skin: { porcelain: '#f2cfb9', sand: '#dca77d', amber: '#b77d52', cocoa: '#764c39' },
@@ -17,10 +20,21 @@ function Ball({ at, scale, color }: { at: Point; scale: Point; color: string }) 
 export default function Avatar({
   appearance,
   seated = false,
+  walking = false,
 }: {
   appearance: Appearance;
   seated?: boolean;
+  walking?: boolean;
 }) {
+  const legs = useRef<(Group | null)[]>([]);
+  const invalidate = useThree((state) => state.invalidate);
+  useFrame(({ clock }) => {
+    if (!walking) return;
+    legs.current.forEach((leg, index) => {
+      if (leg) leg.rotation.x = Math.sin(clock.elapsedTime * 9 + index * Math.PI) * 0.5;
+    });
+    invalidate();
+  });
   const skin = palette.skin[appearance.skin];
   const hair = palette.hairColor[appearance.hairColor];
   const shirt = palette.outfit[appearance.outfit];
@@ -62,11 +76,17 @@ export default function Avatar({
       ) : null}
       <Ball at={[0, 1.35, 0]} scale={[0.4, 0.5, 0.28]} color={shirt} />
       <Ball at={[0, 1.79, 0]} scale={[0.14, 0.14, 0.14]} color={skin} />
-      {[-1, 1].map((side) => (
+      {[-1, 1].map((side, index) => (
         <group key={side}>
           <Ball at={[side * 0.43, 1.38, 0]} scale={[0.14, 0.32, 0.14]} color={shirt} />
           <Ball at={[side * 0.47, 1.08, 0.04]} scale={[0.1, 0.14, 0.1]} color={skin} />
-          <group position={[side * 0.2, 0.83, 0]} rotation={[seated ? -Math.PI / 2 : 0, 0, 0]}>
+          <group
+            ref={(node) => {
+              legs.current[index] = node;
+            }}
+            position={[side * 0.2, 0.83, 0]}
+            rotation={[seated ? -Math.PI / 2 : 0, 0, 0]}
+          >
             <Ball at={[0, -0.28, 0]} scale={[0.17, 0.42, 0.18]} color="#34364e" />
             <Ball at={[0, -0.67, 0.08]} scale={[0.19, 0.12, 0.29]} color="#e6dfd6" />
           </group>

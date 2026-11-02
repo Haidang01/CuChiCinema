@@ -1,5 +1,7 @@
 import {
   generateLayout,
+  seatRoute,
+  motionDuration,
   type RoomRecord,
   type Participant,
   type Playback,
@@ -12,6 +14,7 @@ export class RoomState {
   hostId: string;
   playback: Playback = {
     sourceUrl: null,
+    mediaId: null,
     playing: false,
     position: 0,
     updatedAt: Date.now(),
@@ -28,6 +31,7 @@ export class RoomState {
     this.participants.set(person.userId, {
       ...person,
       seatId: existing?.seatId ?? null,
+      motion: existing?.motion ?? null,
       online: true,
     });
     if (person.userId === this.room.ownerId || !this.participants.get(this.hostId)?.online)
@@ -43,23 +47,39 @@ export class RoomState {
     this.disconnect(userId);
     this.participants.delete(userId);
   }
-  claim(userId: string, seatId: string | null) {
+  claim(userId: string, seatId: string | null, now = Date.now()) {
     const person = this.participants.get(userId);
     if (!person?.online) throw new Error('Bạn chưa vào phòng.');
+    if (person.seatId === seatId) return;
+    if (person.motion && now < person.motion.startedAt + person.motion.durationMs)
+      throw new Error('Nhân vật đang di chuyển. Hãy đợi đến ghế rồi đổi chỗ.');
+    const layout = generateLayout(this.room);
     if (seatId !== null) {
-      if (!generateLayout(this.room).some((s) => s.id === seatId))
-        throw new Error('Ghế không tồn tại.');
+      if (!layout.some((s) => s.id === seatId)) throw new Error('Ghế không tồn tại.');
       if ([...this.participants.values()].some((p) => p.userId !== userId && p.seatId === seatId))
         throw new Error('Ghế vừa được người khác chọn.');
     }
+    const route = seatRoute(
+      layout,
+      layout.find((seat) => seat.id === person.seatId),
+      layout.find((seat) => seat.id === seatId),
+      [...this.participants.keys()].indexOf(userId),
+    );
     person.seatId = seatId;
+    person.motion = { path: route, startedAt: now, durationMs: motionDuration(route) };
+  }
+  finishMovement(userId: string, startedAt: number) {
+    const person = this.participants.get(userId);
+    if (person?.motion?.startedAt === startedAt) person.motion = null;
   }
   command(userId: string, command: PlaybackCommand, now = Date.now()) {
     if (userId !== this.hostId || !this.participants.get(userId)?.online)
       throw new Error('Chỉ chủ phòng được điều khiển phim.');
-    if (command.action === 'source')
+    if (command.action === 'source' || command.action === 'media')
       this.playback = {
-        sourceUrl: command.url,
+        sourceUrl:
+          command.action === 'media' ? `/api/media/${command.mediaId}/stream` : command.url,
+        mediaId: command.action === 'media' ? command.mediaId : null,
         playing: false,
         position: 0,
         updatedAt: now,

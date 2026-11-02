@@ -16,6 +16,19 @@ model User {
   sessions     Session[]
   rooms        Room[]
   watchHistory WatchHistory[]
+  mediaAssets  MediaAsset[]
+}
+
+model MediaAsset {
+  id        String   @id
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  title     String
+  filename  String   @unique
+  mimeType  String
+  bytes     BigInt
+  createdAt DateTime @default(now())
+  @@index([ownerId, createdAt])
 }
 
 model Session {

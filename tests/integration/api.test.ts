@@ -8,6 +8,9 @@ import { io, type Socket } from 'socket.io-client';
 import { createApp, errorHandler, origins } from '../../apps/server/src/app.js';
 import { setupRealtime } from '../../apps/server/src/realtime.js';
 import { db } from '../../apps/server/src/db.js';
+import { mediaRoot } from '../../apps/server/src/media.js';
+import { unlink } from 'node:fs/promises';
+import path from 'node:path';
 import {
   defaultAppearance,
   type RoomSnapshot,
@@ -29,8 +32,11 @@ test(
     app.use(errorHandler);
     const http = createServer(app);
     const realtime = setupRealtime(http, origins);
+    app.locals.canReadMedia = realtime.canReadMedia;
+    app.locals.revokeSession = realtime.revokeSession;
     await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
+    origins.add(base);
     const users: string[] = [];
     const sockets: Socket<ServerEvents, ClientEvents>[] = [];
     const password = randomBytes(24).toString('base64url');
@@ -66,10 +72,12 @@ test(
       assert.equal('passwordHash' in result.data, false);
       return { ...result, email };
     }
-    async function connect(cookie: string) {
+    async function connect(cookie: string, sameOriginPolling = false) {
       const socket: Socket<ServerEvents, ClientEvents> = io(base, {
-        transports: ['websocket'],
-        extraHeaders: { Cookie: cookie, Origin: 'http://localhost:5173' },
+        transports: sameOriginPolling ? ['polling', 'websocket'] : ['websocket'],
+        extraHeaders: sameOriginPolling
+          ? { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin' }
+          : { Cookie: cookie, Origin: 'http://localhost:5173' },
         reconnection: false,
         forceNew: true,
       });
@@ -91,6 +99,97 @@ test(
       assert.equal((await request('/rooms')).status, 401);
       const a = await account('a'),
         b = await account('b');
+      const movie = Buffer.concat([
+        Buffer.from([0, 0, 0, 24]),
+        Buffer.from('ftypisom'),
+        Buffer.alloc(52, 7),
+      ]);
+      const uploadedResponse = await fetch(`${base}/api/media?title=Phim%20QA`, {
+        method: 'POST',
+        headers: {
+          Cookie: a.cookie!,
+          Origin: 'http://localhost:5173',
+          'X-Cineverse-Client': 'web',
+          'Content-Type': 'video/mp4',
+        },
+        body: movie,
+      });
+      assert.equal(uploadedResponse.status, 201);
+      const uploaded = await uploadedResponse.json();
+      assert.equal(uploaded.bytes, movie.length);
+      const invalid = await fetch(`${base}/api/media?title=Invalid`, {
+        method: 'POST',
+        headers: {
+          Cookie: a.cookie!,
+          Origin: 'http://localhost:5173',
+          'X-Cineverse-Client': 'web',
+          'Content-Type': 'video/mp4',
+        },
+        body: Buffer.alloc(16),
+      });
+      assert.equal(invalid.status, 400);
+      const previousLimit = process.env.MAX_MEDIA_BYTES;
+      try {
+        process.env.MAX_MEDIA_BYTES = '32';
+        const tooLarge = await fetch(`${base}/api/media?title=Large`, {
+          method: 'POST',
+          headers: {
+            Cookie: a.cookie!,
+            Origin: 'http://localhost:5173',
+            'X-Cineverse-Client': 'web',
+            'Content-Type': 'video/mp4',
+          },
+          body: movie,
+        });
+        assert.equal(tooLarge.status, 413);
+        const chunked = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(movie));
+            controller.close();
+          },
+        });
+        const streamed = await fetch(`${base}/api/media?title=Streamed`, {
+          method: 'POST',
+          headers: {
+            Cookie: a.cookie!,
+            Origin: 'http://localhost:5173',
+            'X-Cineverse-Client': 'web',
+            'Content-Type': 'video/mp4',
+          },
+          body: chunked,
+          duplex: 'half',
+        } as RequestInit);
+        assert.equal(streamed.status, 413);
+      } finally {
+        if (previousLimit === undefined) delete process.env.MAX_MEDIA_BYTES;
+        else process.env.MAX_MEDIA_BYTES = previousLimit;
+      }
+      assert.equal('filename' in uploaded, false);
+      const streamPath = `/api/media/${uploaded.id}/stream`;
+      assert.equal((await fetch(base + streamPath)).status, 401);
+      assert.equal(
+        (await fetch(base + streamPath, { headers: { Cookie: b.cookie! } })).status,
+        404,
+      );
+      const partial = await fetch(base + streamPath, {
+        headers: { Cookie: a.cookie!, Range: 'bytes=8-15' },
+      });
+      assert.equal(partial.status, 206);
+      assert.equal(partial.headers.get('content-range'), `bytes 8-15/${movie.length}`);
+      assert.deepEqual(Buffer.from(await partial.arrayBuffer()), movie.subarray(8, 16));
+      const head = await fetch(base + streamPath, {
+        method: 'HEAD',
+        headers: { Cookie: a.cookie!, Range: 'bytes=-4' },
+      });
+      assert.equal(head.status, 206);
+      assert.equal(head.headers.get('content-length'), '4');
+      assert.equal((await head.arrayBuffer()).byteLength, 0);
+      assert.equal(
+        (await fetch(base + streamPath, { headers: { Cookie: a.cookie!, Range: 'bytes=10000-' } }))
+          .status,
+        416,
+      );
+      assert.equal((await request('/media', undefined, b.cookie)).data.assets.length, 0);
       assert.equal(
         (await request('/auth/login', { email: a.email, password: 'wrong-password' })).status,
         401,
@@ -154,11 +253,13 @@ test(
       const roomId = created.data.room.id;
       const token = created.data.token;
       assert.equal((await request(`/rooms/${roomId}/invite`, {}, b.cookie)).status, 404);
-      const sa = await connect(a.cookie!),
+      const sa = await connect(a.cookie!, true),
         sb = await connect(b.cookie!);
       assert.equal((await join(sb, roomId, 'invalid-token')).ok, false);
       assert.equal((await join(sa, roomId)).ok, true);
-      assert.equal((await join(sb, roomId, token)).ok, true);
+      const guestJoin = await join(sb, roomId, token);
+      assert.equal(guestJoin.ok, true);
+      if (guestJoin.ok) assert.equal('inviteTokenHash' in guestJoin.data.room, false);
       const races = await Promise.all([claim(sa, 'A1'), claim(sb, 'A1')]);
       assert.equal(races.filter((v) => v.ok).length, 1);
       const unauthorized = await new Promise<Ack<RoomSnapshot>>((resolve) =>
@@ -169,6 +270,19 @@ test(
         ),
       );
       assert.equal(unauthorized.ok, false);
+      const borrowed = await new Promise<Ack<RoomSnapshot>>((resolve) =>
+        sb.emit('playback:command', { action: 'media', mediaId: uploaded.id }, resolve),
+      );
+      assert.equal(borrowed.ok, false);
+      const shared = await new Promise<Ack<RoomSnapshot>>((resolve) =>
+        sa.emit('playback:command', { action: 'media', mediaId: uploaded.id }, resolve),
+      );
+      assert.equal(shared.ok, true);
+      const sharedStream = await fetch(base + streamPath, {
+        headers: { Cookie: b.cookie!, Range: 'bytes=0-7' },
+      });
+      assert.equal(sharedStream.status, 206);
+      await sharedStream.arrayBuffer();
       const source = await new Promise<Ack<RoomSnapshot>>((resolve) =>
         sa.emit(
           'playback:command',
@@ -181,7 +295,20 @@ test(
         sa.emit('playback:command', { action: 'play', position: 42 }, resolve),
       );
       assert.equal(playing.ok, true);
-      if (playing.ok) assert.equal(playing.data.playback.revision, 2);
+      if (playing.ok) assert.equal(playing.data.playback.revision, 3);
+      assert.equal(
+        (await fetch(base + streamPath, { headers: { Cookie: b.cookie! } })).status,
+        404,
+      );
+      const movement = races.find((result) => result.ok);
+      if (movement?.ok) {
+        const finish = Math.max(
+          ...movement.data.participants.map((person) =>
+            person.motion ? person.motion.startedAt + person.motion.durationMs : 0,
+          ),
+        );
+        await new Promise((resolve) => setTimeout(resolve, Math.max(0, finish - Date.now()) + 50));
+      }
       const beforeReconnect = await claim(sa, 'A2');
       assert.equal(beforeReconnect.ok, true);
       sa.disconnect();
@@ -211,6 +338,14 @@ test(
       for (const socket of sockets) socket.disconnect();
       await realtime.stop();
       await new Promise<void>((resolve) => http.close(() => resolve()));
+      const files = await db.mediaAsset.findMany({
+        where: { ownerId: { in: users } },
+        select: { filename: true },
+      });
+      for (const file of files) {
+        assert.equal(path.basename(file.filename), file.filename);
+        await unlink(path.join(mediaRoot(), file.filename)).catch(() => {});
+      }
       await db.user.deleteMany({ where: { id: { in: users } } });
       await db.$disconnect();
     }

@@ -26,7 +26,7 @@ try {
 } finally {
   await admin.end();
 }
-const env = { ...process.env, DATABASE_URL: testUrl };
+const env = { ...process.env, DATABASE_URL: testUrl, MEDIA_ROOT: '.local/test-media' };
 const commands = [
   ['node_modules/prisma/build/index.js', 'migrate', 'deploy'],
   ['node_modules/tsx/dist/cli.mjs', 'scripts/seed.ts'],

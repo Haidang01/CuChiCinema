@@ -14,6 +14,8 @@ if (process.env.NODE_ENV === 'production') {
 app.use(errorHandler);
 const http = createServer(app);
 const realtime = setupRealtime(http, origins);
+app.locals.canReadMedia = realtime.canReadMedia;
+app.locals.revokeSession = realtime.revokeSession;
 const port = Number(process.env.PORT ?? 3001);
 http.listen(port, '127.0.0.1', () => console.log(`CineVerse API: http://localhost:${port}`));
 const shutdown = async () => {

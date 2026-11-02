@@ -11,6 +11,7 @@ import {
   roomSchema,
 } from '../../../packages/shared/src/index.js';
 import { db } from './db.js';
+import { mediaRouter } from './media.js';
 import {
   cookieName,
   cookieOptions,
@@ -108,7 +109,10 @@ export function createApp() {
   });
   app.post('/api/auth/logout', async (req, res) => {
     const session = await sessionFromRequest(req);
-    if (session) await db.session.delete({ where: { id: session.id } });
+    if (session) {
+      await db.session.delete({ where: { id: session.id } });
+      app.locals.revokeSession?.(session.id);
+    }
     res.clearCookie(cookieName, cookieOptions).json({ ok: true });
   });
   app.use('/api', async (req, res, next) => {
@@ -166,6 +170,7 @@ export function createApp() {
     });
     res.json(character);
   });
+  app.use('/api/media', mediaRouter());
   app.get('/api/character/events', async (_, res) => {
     const character = res.locals.user.character;
     res.json(

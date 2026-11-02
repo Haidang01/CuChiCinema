@@ -1,4 +1,7 @@
 import { z } from 'zod';
+export { seatRoute, motionDuration, sampleMotion } from './navigation.js';
+export type { AvatarMotion, Point3 } from './navigation.js';
+import type { AvatarMotion } from './navigation.js';
 
 export const appearanceSchema = z.object({
   version: z.literal(1).default(1),
@@ -66,7 +69,23 @@ export function generateLayout(config: RoomConfig): Seat[] {
       id: `${String.fromCharCode(65 + row)}${col + 1}`,
       groupId: pair ? `r${row}-g${Math.floor(col / 2)}` : `g${i}`,
       index: i,
-      x: (col - (rowSize - 1) / 2) * 1.5 + (col >= 2 ? 0.4 : -0.4),
+      x: pair
+        ? col < 2
+          ? rowSize === 1
+            ? -1.25
+            : col === 0
+              ? -2.75
+              : -1.25
+          : col === 2
+            ? 1.25
+            : 2.75
+        : (rowSize === 1
+            ? [-1.25]
+            : rowSize === 2
+              ? [-1.25, 1.25]
+              : rowSize === 3
+                ? [-2.75, -1.25, 1.25]
+                : [-2.75, -1.25, 1.25, 2.75])[col]!,
       z: row * 2.2,
       y: row * 0.18,
       kind: hasPair ? 'loveseat' : pair ? 'standard' : config.type,
@@ -106,9 +125,11 @@ export interface Participant {
   appearance: Appearance;
   seatId: string | null;
   online: boolean;
+  motion?: AvatarMotion | null;
 }
 export interface Playback {
   sourceUrl: string | null;
+  mediaId: string | null;
   playing: boolean;
   position: number;
   updatedAt: number;
@@ -124,6 +145,7 @@ export interface RoomSnapshot {
 }
 export type Ack<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
 export const playbackCommandSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('media'), mediaId: z.string().uuid() }),
   z.object({
     action: z.literal('source'),
     url: z
@@ -137,6 +159,13 @@ export const playbackCommandSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('seek'), position: z.number().min(0).max(86400) }),
 ]);
 export type PlaybackCommand = z.infer<typeof playbackCommandSchema>;
+export interface MediaAsset {
+  id: string;
+  title: string;
+  mimeType: string;
+  bytes: number;
+  createdAt: string;
+}
 export interface ClientEvents {
   'room:join': (
     input: { roomId: string; token?: string },

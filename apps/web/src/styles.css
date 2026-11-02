@@ -1563,3 +1563,153 @@ h2 {
 main {
   padding-bottom: env(safe-area-inset-bottom);
 }
+[hidden] {
+  display: none !important;
+}
+.view-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: flex-end;
+}
+.view-modes .selected {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+.media-library {
+  padding: 20px;
+  margin-top: 20px;
+  background: #202436;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.media-library-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.media-library-heading h3 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+}
+.media-library > .subtle {
+  margin-top: 10px;
+}
+.media-list {
+  list-style: none;
+  padding: 0;
+  margin-bottom: 0;
+  max-height: 310px;
+  overflow: auto;
+}
+.media-list li {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.media-list li:first-child {
+  margin-top: 17px;
+}
+.media-list li > div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+}
+.media-list strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+.upload-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.upload-progress progress {
+  accent-color: var(--gold);
+  flex: 1;
+  min-width: 100px;
+}
+.texture-source {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+  overflow: hidden;
+  pointer-events: none;
+}
+.unlock-action {
+  margin: 12px 0;
+}
+.screen-section {
+  position: relative;
+  min-width: 0;
+}
+.cinema-canvas {
+  height: clamp(340px, 47vw, 650px);
+}
+.hud-reveal {
+  position: fixed;
+  right: 30px;
+  bottom: 25px;
+  z-index: 30;
+  background: #202436 !important;
+  box-shadow: 0 8px 30px #0006;
+}
+.focus-mode .watch-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+.focus-mode .room-side {
+  display: none;
+}
+.audio-devices {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+.audio-devices label {
+  font-size: 11px;
+}
+.audio-devices select {
+  max-width: 100%;
+  font-size: 11px;
+}
+.room-toolbar {
+  flex-wrap: wrap;
+}
+.focus-mode .cinema-canvas {
+  height: clamp(400px, 70vh, 900px);
+}
+@media (max-width: 600px) {
+  .watch-room .page-heading {
+    flex-wrap: wrap;
+  }
+  .view-modes {
+    justify-content: flex-start;
+  }
+  .media-library {
+    padding: 16px;
+  }
+  .media-list .button {
+    padding: 9px;
+    font-size: 10px;
+  }
+  .cinema-canvas {
+    height: 420px;
+  }
+  .focus-mode .cinema-canvas {
+    height: 65vh;
+  }
+  .hud-reveal {
+    right: 16px;
+    bottom: 16px;
+  }
+}
