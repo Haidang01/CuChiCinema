@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  displayName  String
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  character    Character?
+  sessions     Session[]
+  rooms        Room[]
+  watchHistory WatchHistory[]
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Character {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  appearance Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  events     CharacterEvent[]
+  inventory  CharacterItem[]
+}
+
+model CharacterEvent {
+  id          String    @id @default(cuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  type        String
+  payload     Json
+  createdAt   DateTime  @default(now())
+  @@index([characterId, createdAt])
+}
+
+model Item {
+  id        String @id
+  name      String
+  slot      String
+  assetKey  String
+  owners    CharacterItem[]
+}
+
+model CharacterItem {
+  characterId String
+  itemId      String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  item        Item      @relation(fields: [itemId], references: [id])
+  acquiredAt  DateTime  @default(now())
+  @@id([characterId, itemId])
+}
+
+model Room {
+  id              String @id @default(cuid())
+  ownerId         String
+  owner           User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name            String
+  type            String
+  capacity        Int
+  maxParticipants Int
+  inviteTokenHash String
+  createdAt       DateTime @default(now())
+  watchSessions   WatchSession[]
+  @@index([ownerId, createdAt])
+}
+
+model WatchSession {
+  id          String @id @default(cuid())
+  roomId      String
+  room        Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  sourceUrl   String
+  startedAt   DateTime @default(now())
+  histories   WatchHistory[]
+}
+
+model WatchHistory {
+  id             String @id @default(cuid())
+  userId         String
+  user           User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  watchSessionId String
+  watchSession   WatchSession @relation(fields: [watchSessionId], references: [id], onDelete: Cascade)
+  position       Float @default(0)
+  joinedAt       DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  @@unique([userId, watchSessionId])
+  @@index([userId, updatedAt])
+}
