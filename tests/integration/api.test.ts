@@ -37,6 +37,8 @@ test(
     await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
     origins.add(base);
+    origins.add('http://192.168.86.13:5173');
+    origins.add('https://192.168.86.13:5173');
     const users: string[] = [];
     const sockets: Socket<ServerEvents, ClientEvents>[] = [];
     const password = randomBytes(24).toString('base64url');
@@ -99,6 +101,17 @@ test(
       assert.equal((await request('/rooms')).status, 401);
       const a = await account('a'),
         b = await account('b');
+      const lanResponse = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Cineverse-Client': 'web',
+          Origin: 'http://192.168.86.13:5173',
+        },
+        body: JSON.stringify({ email: a.email, password }),
+      });
+      assert.equal(lanResponse.status, 200);
+      await lanResponse.json();
       const movie = Buffer.concat([
         Buffer.from([0, 0, 0, 24]),
         Buffer.from('ftypisom'),

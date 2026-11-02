@@ -13,6 +13,9 @@
   "scripts": {
     "format": "prettier --write apps packages scripts tests docs README.md AGENTS.md package.json tsconfig.base.json prisma.config.ts",
     "dev": "concurrently -k -n api,web \"npm run dev -w @cineverse/server\" \"npm run dev -w @cineverse/web\"",
+    "dev:lan": "node scripts/dev-lan.mjs",
+    "dev:lan:https": "node scripts/dev-lan.mjs --https",
+    "lan:info": "node scripts/dev-lan.mjs --print-only",
     "build": "npm run build -w @cineverse/web && npm run build -w @cineverse/server",
     "typecheck": "tsc --noEmit -p apps/web && tsc --noEmit -p apps/server",
     "test": "tsx --test tests/domain.test.ts",

@@ -28,6 +28,14 @@ Không dùng build/typecheck làm bằng chứng cho FPS, chất lượng thoạ
 - Browser QA với video hoa CC0 của MDN: đăng nhập/vào phòng, chọn thư viện, phát 2D, chọn ghế và tự chuyển camera, hiển thị video trên màn hình 3D, tua bằng bàn phím và về 2D với duy nhất một HTML video. Breakpoint 390px không tràn ngang và hiển thị video 3D. Ảnh ở `.local/qa-proof/`, không commit dữ liệu QA.
 - Chưa xác minh mic/loa phần cứng, chất lượng voice/TURN, đồng bộ phim qua hai mạng, context loss hoặc FPS trên điện thoại thật. Các kiểm thử hiện tại không thay thế các phép đo đó.
 
+## Cập nhật ưu tiên điện thoại và LAN
+
+- `npm run dev:lan` tìm IP Wi-Fi/Ethernet, bỏ qua adapter ảo mặc định, cấu hình origin HTTP/WSS chính xác và in URL. `npm run lan:info` chỉ in thông tin; `dev:lan:https` dùng chứng chỉ local do người dùng chuẩn bị.
+- Chỉ Vite web 5173 bind `0.0.0.0`; API 3001 và DB giữ localhost. Link mời từ localhost dùng IP LAN; HTTP có ô link để chọn/copy khi Clipboard API không được cấp.
+- Mobile: ô nhập 16px, vùng chạm lớn, nút fullscreen video 2D, khung tập trung gọn ở màn hình dọc và chạm để mở HUD. HTTP LAN có thông báo micro cần HTTPS.
+- Kiểm tra từ máy server qua IP Wi-Fi: web trả 200, API health kết nối database; bind web/API đúng như trên. Breakpoint 390px không tràn ngang. Đây chưa phải kiểm tra kết nối từ điện thoại vật lý.
+- 9 test domain và integration đăng nhập bằng LAN origin qua. Windows báo Wi-Fi profile Public; tạo firewall rule bị OS từ chối do thiếu Administrator. Script mở riêng TCP 5173 từ LocalSubnet và hướng dẫn HTTPS nằm trong `docs/mobile-lan.md`.
+
 ## Việc còn lại
 
 - Kiểm thử 2–3 thiết bị trên hai mạng, cấu hình TURN và đo sai lệch phim thực tế.

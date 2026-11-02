@@ -13,6 +13,7 @@ import {
   Monitor,
   Box,
   Users,
+  Maximize,
 } from 'lucide-react';
 import type {
   Ack,
@@ -49,6 +50,8 @@ export default function WatchRoom({
   const [hudHidden, setHudHidden] = useState(false);
   const activity = useRef(Date.now());
   const [source, setSource] = useState('');
+  const [inviteUrl, setInviteUrl] = useState('');
+  const secureMedia = window.isSecureContext;
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
   const [mediaError, setMediaError] = useState('');
@@ -216,10 +219,21 @@ export default function WatchRoom({
         invite = result.token;
         sessionStorage.setItem(`cineverse-invite:${roomId}`, invite);
       }
-      await navigator.clipboard.writeText(
-        `${location.origin}/?room=${roomId}#invite=${encodeURIComponent(invite)}`,
-      );
-      notify('Đã sao chép link mời. Người nhận cần đăng nhập và có nhân vật.');
+      let origin = location.origin;
+      if (['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
+        const config = await api<{ shareOrigin: string | null }>('/network');
+        if (config.shareOrigin) origin = config.shareOrigin;
+      }
+      const link = `${origin}/?room=${roomId}#invite=${encodeURIComponent(invite)}`;
+      setInviteUrl(link);
+      if (navigator.clipboard?.writeText && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(link);
+          notify('Đã sao chép link mời.');
+        } catch {
+          notify('Chọn hoặc nhấn giữ link bên dưới để sao chép.');
+        }
+      } else notify('Chọn hoặc nhấn giữ link bên dưới để sao chép.');
     } catch (e) {
       notify((e as Error).message);
     }
@@ -233,6 +247,10 @@ export default function WatchRoom({
     <div
       className={`watch-room ${view === 'focus' ? 'focus-mode' : ''}`}
       onPointerMove={() => {
+        activity.current = Date.now();
+        if (hudHidden) setHudHidden(false);
+      }}
+      onPointerDown={() => {
         activity.current = Date.now();
         if (hudHidden) setHudHidden(false);
       }}
@@ -254,7 +272,8 @@ export default function WatchRoom({
       <div className="room-toolbar" hidden={hudHidden} data-watch-controls>
         <button
           className={`button ${voice.enabled ? 'primary' : 'secondary'}`}
-          disabled={voice.busy || status !== 'Đã kết nối'}
+          disabled={!secureMedia || voice.busy || status !== 'Đã kết nối'}
+          aria-describedby={!secureMedia ? 'lan-microphone-note' : undefined}
           onClick={() => {
             void voice.toggleMic();
           }}
@@ -274,6 +293,27 @@ export default function WatchRoom({
           <Copy size={16} /> Link mời
         </button>
       </div>
+      {!secureMedia ? (
+        <p className="lan-note" id="lan-microphone-note">
+          Micro cần kết nối HTTPS. Bạn vẫn có thể xem phim, chọn ghế và kiểm tra giao diện.
+        </p>
+      ) : null}
+      {inviteUrl && !hudHidden ? (
+        <div className="invite-link-panel" data-watch-controls>
+          <label>
+            Link mời cho điện thoại cùng mạng
+            <input
+              aria-label="Link mời phòng"
+              value={inviteUrl}
+              readOnly
+              onFocus={(event) => event.target.select()}
+            />
+          </label>
+          <button className="text-button" onClick={() => setInviteUrl('')}>
+            Ẩn link
+          </button>
+        </div>
+      ) : null}
       <div className="page-heading" hidden={hudHidden} data-watch-controls>
         <div>
           <h1>{snapshot?.room.name ?? 'Phòng chiếu của bạn'}</h1>
@@ -420,6 +460,27 @@ export default function WatchRoom({
             </p>
           ) : null}
           <div className="playback-bar" hidden={hudHidden} data-watch-controls>
+            {!scene && videoElement ? (
+              <button
+                className="icon-button"
+                aria-label="Xem phim toàn màn hình"
+                onClick={() => {
+                  const element = video.current as
+                    | (HTMLVideoElement & { webkitEnterFullscreen?: () => void })
+                    | null;
+                  if (element?.requestFullscreen)
+                    void element
+                      .requestFullscreen()
+                      .catch(() =>
+                        notify('Chưa mở được toàn màn hình. Hãy thử lại sau khi phim tải xong.'),
+                      );
+                  else if (element?.webkitEnterFullscreen) element.webkitEnterFullscreen();
+                  else notify('Trình duyệt chưa hỗ trợ chế độ toàn màn hình này.');
+                }}
+              >
+                <Maximize size={20} />
+              </button>
+            ) : null}
             <button
               className="icon-button"
               disabled={!host || !snapshot?.playback.sourceUrl}
@@ -544,7 +605,8 @@ export default function WatchRoom({
           <div className="voice-controls">
             <button
               className={`button ${voice.enabled ? 'primary' : 'secondary'}`}
-              disabled={voice.busy || status !== 'Đã kết nối'}
+              disabled={!secureMedia || voice.busy || status !== 'Đã kết nối'}
+              aria-describedby={!secureMedia ? 'lan-microphone-note' : undefined}
               onClick={() => {
                 void voice.toggleMic();
               }}

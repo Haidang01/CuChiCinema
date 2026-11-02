@@ -12,6 +12,7 @@ import {
 } from '../../../packages/shared/src/index.js';
 import { db } from './db.js';
 import { mediaRouter } from './media.js';
+import { configuredOrigins } from './origins.js';
 import {
   cookieName,
   cookieOptions,
@@ -24,12 +25,7 @@ import {
   hashToken,
 } from './auth.js';
 
-export const origins = new Set([
-  process.env.APP_ORIGIN ?? 'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'http://localhost:3001',
-  'http://127.0.0.1:3001',
-]);
+export const origins = configuredOrigins();
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
@@ -171,6 +167,11 @@ export function createApp() {
     res.json(character);
   });
   app.use('/api/media', mediaRouter());
+  app.get('/api/network', (_, res) => {
+    res.json({
+      shareOrigin: process.env.DEV_LAN === '1' ? (process.env.LAN_SHARE_ORIGIN ?? null) : null,
+    });
+  });
   app.get('/api/character/events', async (_, res) => {
     const character = res.locals.user.character;
     res.json(

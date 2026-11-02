@@ -9,6 +9,7 @@ Private virtual cinema for 2–3 people with persistent game-like characters. Re
 - `packages/shared`: payload schemas, event contracts, deterministic layouts.
 - `prisma`: schema and versioned migrations. Keep migrations additive for existing data.
 - `npm run dev`, `npm run typecheck`, `npm test`, `npm run build`.
+- Primary target: mobile phones. Verify portrait/touch usability before desktop polish. `npm run dev:lan` exposes only the Vite web port on LAN with explicit detected origins; API/DB stay loopback. HTTPS/certificate and Windows firewall setup: `docs/mobile-lan.md`.
 - `npm run db:generate`, `npm run db:setup`. Database URL is server-only in ignored `.env`.
 - `npm run test:integration`: runner forces the separate local `cineverse_test` database, applies migrations/seeds and creates disposable QA users/rooms. Cleanup removes only generated IDs in that database. Never point integration mutations at the application database.
 

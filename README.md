@@ -21,6 +21,8 @@ Nếu `.env` đã tồn tại, giữ file hiện tại, không sao chép đè. M
 - API: http://127.0.0.1:3001/api/health
 - Database ứng dụng: `cineverse`; kiểm thử: `cineverse_test`.
 
+**Kiểm tra bằng điện thoại cùng Wi-Fi:** chạy `npm run dev:lan`, rồi mở URL mạng được in trong terminal. Máy này hiện dùng `http://192.168.86.13:5173`. Xem [hướng dẫn LAN, firewall và HTTPS cho micro](docs/mobile-lan.md). `npm run dev` vẫn chỉ mở localhost.
+
 Đăng ký tài khoản → đặt tên/ngoại hình → lưu nhân vật → Phòng chiếu → tạo phòng → gửi link mời. Người được mời cần có tài khoản và nhân vật. Host tải MP4/WebM vào thư viện, rồi bấm **Chiếu phim**. Có thể dùng URL HTTP(S) trực tiếp ở chế độ 2D; nguồn có giới hạn đăng nhập/CORS/DRM có thể không phát được.
 
 ## Đã triển khai

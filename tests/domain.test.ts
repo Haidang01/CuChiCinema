@@ -11,6 +11,8 @@ import {
 } from '../packages/shared/src/index.js';
 import { RoomState } from '../apps/server/src/room-state.js';
 import { parseByteRange } from '../apps/server/src/media.js';
+import { configuredOrigins } from '../apps/server/src/origins.js';
+import { isPrivateIPv4, lanInterfaces } from '../scripts/lan-network.mjs';
 
 const record: RoomRecord = {
   id: 'room',
@@ -21,6 +23,40 @@ const record: RoomRecord = {
   maxParticipants: 3,
   createdAt: new Date().toISOString(),
 };
+test('LAN discovery prefers physical Wi-Fi and validates an explicit interface', () => {
+  const row = (address: string, internal = false) => ({ address, family: 'IPv4', internal });
+  const interfaces = {
+    Ethernet: [row('10.0.0.3')],
+    'ZeroTier One': [row('10.174.179.24')],
+    'Wi-Fi': [row('192.168.86.13')],
+    Loopback: [row('127.0.0.1', true)],
+  };
+  assert.deepEqual(
+    lanInterfaces(interfaces).map((row: { address: string }) => row.address),
+    ['192.168.86.13', '10.0.0.3'],
+  );
+  assert.equal(lanInterfaces(interfaces, '10.174.179.24')[0]?.address, '10.174.179.24');
+  assert.throws(() => lanInterfaces(interfaces, '192.168.1.99'));
+  assert.equal(isPrivateIPv4('172.31.0.1'), true);
+  assert.equal(isPrivateIPv4('172.32.0.1'), false);
+  assert.equal(isPrivateIPv4('8.8.8.8'), false);
+  assert.equal(isPrivateIPv4('999.1.1.1'), false);
+});
+test('origin configuration adds exact LAN origins without allowing arbitrary sites', () => {
+  const origins = configuredOrigins({
+    APP_ORIGINS: 'http://192.168.86.13:5173,https://192.168.86.13:5173',
+  });
+  assert.ok(origins.has('http://192.168.86.13:5173'));
+  assert.ok(origins.has('https://192.168.86.13:5173'));
+  assert.equal(origins.has('http://192.168.86.14:5173'), false);
+  for (const value of [
+    '*',
+    'https://example.com/private',
+    'https://user:pass@example.com',
+    'https://example.com?token=x',
+  ])
+    assert.throws(() => configuredOrigins({ APP_ORIGINS: value }));
+});
 const person = (userId: string) => ({
   userId,
   name: userId,
