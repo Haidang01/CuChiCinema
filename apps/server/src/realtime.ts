@@ -3,7 +3,11 @@ import { Server } from 'socket.io';
 import { z } from 'zod';
 import {
   appearanceSchema,
+  avatarActionSchema,
+  avatarActions,
   playbackCommandSchema,
+  queueCommandSchema,
+  stageCommandSchema,
   type ClientEvents,
   type ServerEvents,
   type RoomRecord,
@@ -11,19 +15,13 @@ import {
 import { cookieName, hashToken, sessionFromToken } from './auth.js';
 import { db } from './db.js';
 import { RoomState } from './room-state.js';
+import { allowedRealtimeRequest } from './origins.js';
 
 export function setupRealtime(http: HttpServer, origins: Set<string>) {
   const io = new Server<ClientEvents, ServerEvents>(http, {
     maxHttpBufferSize: 16000,
     allowRequest: (req, callback) => {
-      // Same-origin browser GET polling does not necessarily include Origin.
-      // Cross-site and non-browser requests still need an explicitly allowed Origin.
-      const origin = req.headers.origin;
-      const sameOriginPolling =
-        !origin &&
-        req.headers['sec-fetch-site'] === 'same-origin' &&
-        [...origins].some((value) => new URL(value).host === req.headers.host);
-      callback(null, origin ? origins.has(origin) : sameOriginPolling);
+      callback(null, allowedRealtimeRequest(req.headers, origins));
     },
   });
   const rooms = new Map<string, RoomState>();
@@ -44,6 +42,11 @@ export function setupRealtime(http: HttpServer, origins: Set<string>) {
   };
   const broadcast = (state: RoomState) =>
     io.to(state.room.id).emit('room:snapshot', state.snapshot());
+  const persistMedia = (state: RoomState) =>
+    db.room.update({
+      where: { id: state.room.id },
+      data: { mediaState: state.savedMedia() },
+    });
   const flush = async (state: RoomState) => {
     if (!state.watchSessionId) return;
     const watchSessionId = state.watchSessionId;
@@ -84,6 +87,7 @@ export function setupRealtime(http: HttpServer, origins: Set<string>) {
       character: { name: string; appearance: unknown } | null;
     };
     let roomId: string | undefined;
+    let lastReaction = 0;
     let count = 0;
     let windowStart = Date.now();
     socket.use(async (_, next) => {
@@ -158,11 +162,20 @@ export function setupRealtime(http: HttpServer, origins: Set<string>) {
               id: record.id,
               ownerId: record.ownerId,
               name: record.name,
+              seatsPerRow: record.seatsPerRow,
+              rowSpacing: record.rowSpacing,
+              rowRise: record.rowRise,
+              chairStyle: record.chairStyle as RoomRecord['chairStyle'],
+              chairColor: record.chairColor,
+              wallColor: record.wallColor,
+              seatOverrides: record.seatOverrides as RoomRecord['seatOverrides'],
               capacity: record.capacity,
               maxParticipants: record.maxParticipants,
               type: record.type as RoomRecord['type'],
               createdAt: record.createdAt.toISOString(),
             });
+            state.restoreMedia(record.mediaState);
+            state.restoreStage(record.stageSettings);
             rooms.set(record.id, state);
           }
           state.join({
@@ -198,6 +211,135 @@ export function setupRealtime(http: HttpServer, origins: Set<string>) {
         });
       }
     });
+    socket.on('avatar:input', (input) => {
+      if (!roomId || clients.get(`${roomId}:${user.id}`) !== socket.id) return;
+      const parsed = z
+        .object({ x: z.number().min(-1).max(1), z: z.number().min(-1).max(1) })
+        .safeParse(input);
+      if (parsed.success) {
+        const state = rooms.get(roomId);
+        if (!state) return;
+        const revision = state.entertainmentRevision;
+        state.setInput(user.id, parsed.data.x, parsed.data.z);
+        if (revision !== state.entertainmentRevision) broadcast(state);
+      }
+    });
+    socket.on('avatar:walk', async (target, ack) => {
+      if (typeof ack !== 'function') return;
+      try {
+        const point = z
+          .object({ x: z.number().min(-200).max(200), z: z.number().min(-4).max(500) })
+          .parse(target);
+        if (!roomId) throw new Error('Bạn chưa vào phòng.');
+        const id = roomId;
+        await serial(id, async () => {
+          const state = rooms.get(id)!;
+          state.walk(user.id, point.x, point.z);
+          broadcast(state);
+          ack({ ok: true, data: state.snapshot() });
+        });
+      } catch (error) {
+        ack({
+          ok: false,
+          error:
+            error instanceof z.ZodError
+              ? 'Điểm đến không hợp lệ.'
+              : error instanceof Error
+                ? error.message
+                : 'Không thể di chuyển.',
+        });
+      }
+    });
+    socket.on('chat:send', (input, ack) => {
+      if (typeof ack !== 'function') return;
+      try {
+        const text = z.string().trim().min(1).max(280).parse(input);
+        if (!roomId) throw new Error('Bạn chưa vào phòng.');
+        const message = rooms.get(roomId)!.sendChat(user.id, text);
+        io.to(roomId).emit('chat:message', message);
+        ack({ ok: true, data: message });
+      } catch (error) {
+        ack({
+          ok: false,
+          error:
+            error instanceof z.ZodError
+              ? 'Tin nhắn cần từ 1–280 ký tự.'
+              : error instanceof Error
+                ? error.message
+                : 'Không gửi được tin nhắn.',
+        });
+      }
+    });
+    socket.on('avatar:action', async (input, ack) => {
+      if (typeof ack !== 'function') return;
+      try {
+        const action = avatarActionSchema.parse(input);
+        if (!roomId) throw new Error('Bạn chưa vào phòng.');
+        const id = roomId;
+        await serial(id, async () => {
+          if (clients.get(id + ':' + user.id) !== socket.id)
+            throw new Error('Phiên kết nối đã thay đổi.');
+          const state = rooms.get(id)!;
+          const event = state.performAction(user.id, action);
+          io.to(id).emit('avatar:action', event);
+          broadcast(state);
+          ack({ ok: true, data: event });
+        });
+      } catch (error) {
+        ack({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Không thể thực hiện động tác.',
+        });
+      }
+    });
+    socket.on('stage:command', async (input, ack) => {
+      if (typeof ack !== 'function') return;
+      try {
+        const command = stageCommandSchema.parse(input);
+        if (!roomId) throw new Error('Bạn chưa vào phòng.');
+        const id = roomId;
+        await serial(id, async () => {
+          if (clients.get(id + ':' + user.id) !== socket.id)
+            throw new Error('Phiên kết nối đã thay đổi.');
+          const state = rooms.get(id)!;
+          if (command.action === 'configure') {
+            const settings = state.nextStageSettings(user.id, command);
+            await db.room.update({ where: { id }, data: { stageSettings: settings } });
+            state.commitStage(settings);
+          } else state.handleStage(user.id, command);
+          broadcast(state);
+          ack({ ok: true, data: state.snapshot() });
+        });
+      } catch (error) {
+        ack({
+          ok: false,
+          error:
+            error instanceof z.ZodError
+              ? 'Lệnh sân khấu không hợp lệ.'
+              : error instanceof Error
+                ? error.message
+                : 'Không thể cập nhật sân khấu.',
+        });
+      }
+    });
+    socket.on('reaction:send', (input, ack) => {
+      if (typeof ack !== 'function') return;
+      const parsed = z.enum(['❤️', '😂', '👏', '😮', '🎉', '🍿']).safeParse(input);
+      if (
+        !roomId ||
+        clients.get(`${roomId}:${user.id}`) !== socket.id ||
+        !rooms.get(roomId)?.participants.get(user.id)?.online ||
+        !parsed.success ||
+        Date.now() - lastReaction < 1500
+      ) {
+        ack({ ok: false, error: 'Chọn cảm xúc hợp lệ và chờ một chút trước khi gửi tiếp.' });
+        return;
+      }
+      lastReaction = Date.now();
+      const reaction = { userId: user.id, emoji: parsed.data, at: lastReaction };
+      io.to(roomId).emit('reaction:play', reaction);
+      ack({ ok: true, data: reaction });
+    });
     socket.on('seat:claim', async (seatId, ack) => {
       if (typeof ack !== 'function') return;
       try {
@@ -231,6 +373,85 @@ export function setupRealtime(http: HttpServer, origins: Set<string>) {
         ack({ ok: false, error: e instanceof Error ? e.message : 'Không thể chọn ghế.' });
       }
     });
+    socket.on('character:refresh', async (ack) => {
+      if (typeof ack !== 'function') return;
+      try {
+        if (!roomId) throw new Error('Bạn chưa vào phòng.');
+        const id = roomId;
+        await serial(id, async () => {
+          const state = rooms.get(id)!;
+          const person = state.participants.get(user.id);
+          if (!person?.online || clients.get(`${id}:${user.id}`) !== socket.id)
+            throw new Error('Bạn chưa vào phòng.');
+          const character = await db.character.findUnique({ where: { userId: user.id } });
+          if (!character) throw new Error('Chưa có nhân vật.');
+          person.name = character.name;
+          person.appearance = appearanceSchema.parse(character.appearance);
+          user.character = character;
+          broadcast(state);
+          ack({ ok: true, data: state.snapshot() });
+        });
+      } catch {
+        ack({ ok: false, error: 'Chưa cập nhật được nhân vật trong rạp. Hãy thử lại.' });
+      }
+    });
+    socket.on('queue:command', async (input, ack) => {
+      if (typeof ack !== 'function') return;
+      try {
+        const command = queueCommandSchema.parse(input);
+        if (!roomId) throw new Error('Bạn chưa vào phòng.');
+        const id = roomId;
+        await serial(id, async () => {
+          const state = rooms.get(id)!;
+          if (
+            clients.get(`${id}:${user.id}`) !== socket.id ||
+            !state.participants.get(user.id)?.online
+          )
+            throw new Error('Bạn chưa vào phòng.');
+          const previousMedia = state.savedMedia();
+          try {
+            if (command.action === 'add') state.enqueue(user.id, command.url, command.title);
+            else if (command.action === 'media') {
+              const asset = await db.mediaAsset.findUnique({ where: { id: command.mediaId } });
+              if (!asset || asset.ownerId !== user.id)
+                throw new Error('Bạn không sở hữu phim này.');
+              state.enqueue(
+                user.id,
+                `/api/media/${asset.id}/stream`,
+                asset.title,
+                asset.id,
+                asset.mimeType.startsWith('image/') ? 'image' : 'video',
+              );
+            } else if (command.action === 'next') {
+              const item = state.nextQueued(user.id, command.revision);
+              await flush(state);
+              const session = await db.watchSession.create({
+                data: { roomId: id, sourceUrl: item.url },
+              });
+              // Consume only after persistence succeeds; serial lock prevents duplicate advances.
+              state.startQueued(user.id, command.revision);
+              state.watchSessionId = session.id;
+            } else state.editQueue(user.id, command.action, command.id);
+            await persistMedia(state);
+          } catch (error) {
+            state.restoreMedia(previousMedia);
+            throw error;
+          }
+          broadcast(state);
+          ack({ ok: true, data: state.snapshot() });
+        });
+      } catch (error) {
+        ack({
+          ok: false,
+          error:
+            error instanceof z.ZodError
+              ? 'Lệnh hàng chờ không hợp lệ.'
+              : error instanceof Error
+                ? error.message
+                : 'Không cập nhật được hàng chờ.',
+        });
+      }
+    });
     socket.on('playback:command', async (input, ack) => {
       if (typeof ack !== 'function') return;
       try {
@@ -240,9 +461,14 @@ export function setupRealtime(http: HttpServer, origins: Set<string>) {
         await serial(id, async () => {
           const state = rooms.get(id)!;
           if (state.hostId !== user.id) throw new Error('Chỉ chủ phòng được điều khiển phim.');
+          const previousMedia = state.savedMedia();
+          let title: string | undefined;
+          let mediaKind: 'video' | 'image' = 'video';
           if (command.action === 'media') {
             const asset = await db.mediaAsset.findUnique({ where: { id: command.mediaId } });
             if (!asset || asset.ownerId !== user.id) throw new Error('Bạn không sở hữu phim này.');
+            title = asset.title;
+            mediaKind = asset.mimeType.startsWith('image/') ? 'image' : 'video';
           }
           if (command.action === 'source' || command.action === 'media') {
             await flush(state);
@@ -255,7 +481,17 @@ export function setupRealtime(http: HttpServer, origins: Set<string>) {
             });
             state.watchSessionId = session.id;
           }
-          state.command(user.id, command);
+          try {
+            state.command(user.id, command);
+            if (command.action === 'media') {
+              state.playback.title = title;
+              state.playback.kind = mediaKind;
+            }
+            await persistMedia(state);
+          } catch (error) {
+            state.restoreMedia(previousMedia);
+            throw error;
+          }
           await flush(state).catch(() => console.error('Không thể lưu tiến độ xem.'));
           broadcast(state);
           ack({ ok: true, data: state.snapshot() });
@@ -295,6 +531,32 @@ export function setupRealtime(http: HttpServer, origins: Set<string>) {
       void flush(state).catch(() => console.error('Không thể lưu tiến độ xem.'));
   }, 15000);
   interval.unref();
+  const entertainmentInterval = setInterval(() => {
+    for (const state of rooms.values()) if (state.pruneEntertainment()) broadcast(state);
+  }, 500);
+  entertainmentInterval.unref();
+  let previousTick = Date.now();
+  const movementInterval = setInterval(() => {
+    const now = Date.now();
+    const delta = (now - previousTick) / 1000;
+    previousTick = now;
+    for (const state of rooms.values())
+      if (state.tickMovement(delta, now))
+        io.to(state.room.id).emit('avatars:update', {
+          roomId: state.room.id,
+          revision: state.avatarRevision,
+          participants: [...state.participants.values()].map(
+            ({ userId, position, yaw, walking, motion }) => ({
+              userId,
+              position,
+              yaw,
+              walking,
+              motion,
+            }),
+          ),
+        });
+  }, 66);
+  movementInterval.unref();
   return {
     io,
     revokeSession: (sessionId: string) => {
@@ -309,6 +571,8 @@ export function setupRealtime(http: HttpServer, origins: Set<string>) {
     stop: async () => {
       stopping = true;
       clearInterval(interval);
+      clearInterval(entertainmentInterval);
+      clearInterval(movementInterval);
       io.disconnectSockets(true);
       await Promise.allSettled([...locks.values()]);
       for (const timer of timers.values()) clearTimeout(timer);

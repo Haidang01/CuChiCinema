@@ -7,10 +7,12 @@ export default function MediaLibrary({
   onSelect,
   notify,
   selectedId,
+  imagesOnly = false,
 }: {
   onSelect: (id: string) => void;
   notify: (message: string) => void;
   selectedId: string | null;
+  imagesOnly?: boolean;
 }) {
   const [assets, setAssets] = useState<MediaAsset[]>([]);
   const [limit, setLimit] = useState(4 * 1024 ** 3);
@@ -19,6 +21,9 @@ export default function MediaLibrary({
   const request = useRef<XMLHttpRequest | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
+  const visibleAssets = assets.filter((asset) =>
+    asset.mimeType.startsWith(imagesOnly ? 'image/' : 'video/'),
+  );
   const load = async () => {
     setLoading(true);
     try {
@@ -45,17 +50,36 @@ export default function MediaLibrary({
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    if (imagesOnly && file.size > Math.min(limit, 10 * 1024 ** 2)) {
+      notify('Ảnh vượt giới hạn 10 MB.');
+      return;
+    }
     if (file.size > limit) {
       notify(`File vượt giới hạn ${(limit / 1024 ** 3).toFixed(1)} GB.`);
       return;
     }
-    const mime = file.name.toLowerCase().endsWith('.webm')
-      ? 'video/webm'
-      : file.name.toLowerCase().endsWith('.mp4')
-        ? 'video/mp4'
-        : '';
+    const imageMime = /\.jpe?g$/i.test(file.name)
+      ? 'image/jpeg'
+      : /\.png$/i.test(file.name)
+        ? 'image/png'
+        : /\.webp$/i.test(file.name)
+          ? 'image/webp'
+          : '';
+    const mime = imagesOnly
+      ? imageMime
+      : file.name.toLowerCase().endsWith('.webm')
+        ? 'video/webm'
+        : file.name.toLowerCase().endsWith('.mp4')
+          ? 'video/mp4'
+          : '';
     if (!mime) {
-      notify('Chọn file MP4 hoặc WebM.');
+      if (imagesOnly) {
+        notify('Chọn ảnh JPG/PNG/WebP. Ảnh HEIC cần xuất sang JPG trước.');
+        return;
+      }
+      notify(
+        'Hiện hỗ trợ MP4/WebM. Video iPhone dạng MOV cần chuyển sang MP4 (H.264/AAC) trước khi tải.',
+      );
       return;
     }
     const xhr = new XMLHttpRequest();
@@ -84,7 +108,7 @@ export default function MediaLibrary({
         return;
       }
       setAssets((previous) => [result, ...previous]);
-      notify('Đã tải phim vào thư viện. Chọn phim để bắt đầu.');
+      notify('Đã tải lên thư viện. Chọn Thêm vào hàng chờ để cùng xem.');
     };
     xhr.onerror = () => {
       if (mounted.current) {
@@ -101,10 +125,13 @@ export default function MediaLibrary({
     xhr.send(file);
   }
   return (
-    <section className="media-library" aria-label="Thư viện phim của bạn">
+    <section
+      className="media-library"
+      aria-label={imagesOnly ? 'Thư viện ảnh của bạn' : 'Thư viện phim của bạn'}
+    >
       <div className="media-library-heading">
         <h3>
-          <Film size={17} /> Thư viện phim của bạn
+          <Film size={17} /> {imagesOnly ? 'Ảnh của bạn' : 'Thư viện phim của bạn'}
         </h3>
         <button
           className="icon-button"
@@ -117,21 +144,34 @@ export default function MediaLibrary({
           <RefreshCw size={16} />
         </button>
       </div>
-      <p className="subtle">
-        MP4/WebM, tối đa {(limit / 1024 ** 3).toFixed(1)} GB mỗi file. Chỉ tải nội dung bạn có quyền
-        sử dụng.
-      </p>
+      {imagesOnly ? (
+        <p className="subtle">JPG/PNG/WebP, tối đa 10 MB. HEIC cần xuất sang JPG.</p>
+      ) : (
+        <>
+          <p className="subtle">
+            MP4/WebM, tối đa {(limit / 1024 ** 3).toFixed(1)} GB mỗi file. Chỉ tải nội dung bạn có
+            quyền sử dụng.
+          </p>
+          <p className="subtle">
+            Video iPhone dạng MOV cần chuyển sang MP4 (H.264/AAC) trước khi tải.
+          </p>
+        </>
+      )}
       <input
         ref={input}
         className="sr-only"
         type="file"
-        accept="video/mp4,video/webm,.mp4,.webm"
-        aria-label="Chọn file phim tải lên"
+        accept={
+          imagesOnly
+            ? 'image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp'
+            : 'video/mp4,video/webm,.mp4,.webm'
+        }
+        aria-label={imagesOnly ? 'Chọn ảnh tải lên' : 'Chọn file phim tải lên'}
         onChange={upload}
       />
       {progress === null ? (
         <button className="button secondary" onClick={() => input.current?.click()}>
-          <Upload size={16} /> Tải phim lên
+          <Upload size={16} /> {imagesOnly ? 'Tải ảnh lên' : 'Tải phim lên'}
         </button>
       ) : (
         <div className="upload-progress" role="status">
@@ -144,9 +184,9 @@ export default function MediaLibrary({
       )}
       {loading ? (
         <p className="subtle">Đang tải thư viện…</p>
-      ) : assets.length ? (
+      ) : visibleAssets.length ? (
         <ul className="media-list">
-          {assets.map((asset) => (
+          {visibleAssets.map((asset) => (
             <li key={asset.id}>
               <div>
                 <strong>{asset.title}</strong>
@@ -157,13 +197,17 @@ export default function MediaLibrary({
                 disabled={asset.id === selectedId}
                 onClick={() => onSelect(asset.id)}
               >
-                {asset.id === selectedId ? 'Đang chọn' : 'Chiếu phim'}
+                {asset.id === selectedId ? 'Đang chọn' : 'Thêm vào hàng chờ'}
               </button>
             </li>
           ))}
         </ul>
       ) : (
-        <p className="subtle">Chưa có phim. Tải một file để chuẩn bị buổi chiếu.</p>
+        <p className="subtle">
+          {imagesOnly
+            ? 'Chưa có ảnh. Chọn Tải ảnh lên để chia sẻ cùng phòng.'
+            : 'Chưa có phim. Tải một file để chuẩn bị buổi chiếu.'}
+        </p>
       )}
     </section>
   );

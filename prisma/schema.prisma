@@ -86,10 +86,19 @@ model Room {
   owner           User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   name            String
   type            String
+  chairStyle      String @default("classic")
+  chairColor      String @default("#4e3644")
+  wallColor       String @default("#20232d")
+  seatOverrides  Json   @default("[]")
   capacity        Int
+  seatsPerRow     Int @default(4)
+  rowSpacing      Float @default(2.2)
+  rowRise         Float @default(0.18)
   maxParticipants Int
   inviteTokenHash String
   createdAt       DateTime @default(now())
+  stageSettings   Json?
+  mediaState      Json?
   watchSessions   WatchSession[]
   @@index([ownerId, createdAt])
 }

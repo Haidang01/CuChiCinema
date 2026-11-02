@@ -24,6 +24,26 @@ export const maxMediaBytes = () => {
   const value = Number(process.env.MAX_MEDIA_BYTES || 4 * 1024 ** 3);
   return Number.isSafeInteger(value) && value > 0 ? value : 4 * 1024 ** 3;
 };
+const mediaExtensions: Record<string, string> = {
+  'video/mp4': '.mp4',
+  'video/webm': '.webm',
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+};
+export function validMediaHeader(mime: string, header: Buffer) {
+  if (mime === 'video/mp4') return header.subarray(4, 8).toString() === 'ftyp';
+  if (mime === 'video/webm')
+    return header.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+  if (mime === 'image/jpeg') return header.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+  if (mime === 'image/png')
+    return header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (mime === 'image/webp')
+    return (
+      header.subarray(0, 4).toString() === 'RIFF' && header.subarray(8, 12).toString() === 'WEBP'
+    );
+  return false;
+}
 export function parseByteRange(
   value: string | undefined,
   size: number,
@@ -68,17 +88,21 @@ export function mediaRouter() {
   router.post('/', async (req, res, next) => {
     const title = typeof req.query.title === 'string' ? req.query.title.trim() : '';
     const mimeType = req.headers['content-type']?.split(';')[0];
-    if (!title || title.length > 120 || !['video/mp4', 'video/webm'].includes(mimeType ?? '')) {
-      res.status(400).json({ error: 'Chọn file MP4/WebM và tên phim không quá 120 ký tự.' });
+    if (!title || title.length > 120 || !Object.hasOwn(mediaExtensions, mimeType ?? '')) {
+      res
+        .status(400)
+        .json({ error: 'Chọn MP4/WebM hoặc ảnh JPG/PNG/WebP, tên không quá 120 ký tự.' });
       return;
     }
-    const limit = maxMediaBytes();
+    const limit = mimeType?.startsWith('image/')
+      ? Math.min(maxMediaBytes(), 10 * 1024 ** 2)
+      : maxMediaBytes();
     if (Number(req.headers['content-length']) > limit) {
       res.status(413).json({ error: 'File vượt giới hạn dung lượng tải lên.' });
       return;
     }
     const id = randomUUID();
-    const filename = `${id}${mimeType === 'video/mp4' ? '.mp4' : '.webm'}`;
+    const filename = `${id}${mediaExtensions[mimeType!]}`;
     const root = mediaRoot();
     const file = path.join(root, filename);
     let bytes = 0;
@@ -110,13 +134,10 @@ export function mediaRouter() {
       } finally {
         await handle.close();
       }
-      const valid =
-        mimeType === 'video/mp4'
-          ? header.subarray(4, 8).toString() === 'ftyp'
-          : header.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+      const valid = validMediaHeader(mimeType!, header);
       if (!valid || bytes < 12) {
         await unlink(file);
-        res.status(400).json({ error: 'Nội dung file không đúng định dạng MP4/WebM.' });
+        res.status(400).json({ error: 'Nội dung file không đúng định dạng đã chọn.' });
         return;
       }
       const asset = await db.mediaAsset.create({

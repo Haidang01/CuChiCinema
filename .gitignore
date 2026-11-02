@@ -10,3 +10,4 @@ media/
 playwright-report/
 test-results/
 *.tsbuildinfo
+*.sql

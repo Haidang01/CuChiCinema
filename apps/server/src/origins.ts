@@ -1,3 +1,24 @@
+import type { IncomingHttpHeaders } from 'node:http';
+
+export function allowedRealtimeRequest(headers: IncomingHttpHeaders, origins: Set<string>) {
+  if (headers.origin) return origins.has(headers.origin);
+  const site = headers['sec-fetch-site'];
+  if (site && site !== 'same-origin') return false;
+  // Insecure LAN HTTP may omit Fetch Metadata and Origin on same-origin GETs.
+  // Require an exact allowed Referer origin and matching Host in that case.
+  if (headers.referer) {
+    try {
+      const referrer = new URL(headers.referer);
+      return origins.has(referrer.origin) && referrer.host === headers.host;
+    } catch {
+      return false;
+    }
+  }
+  return (
+    site === 'same-origin' && [...origins].some((value) => new URL(value).host === headers.host)
+  );
+}
+
 export function configuredOrigins(env: NodeJS.ProcessEnv = process.env) {
   const result = new Set([
     'http://localhost:5173',

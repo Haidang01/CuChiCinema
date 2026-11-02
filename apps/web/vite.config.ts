@@ -26,6 +26,13 @@ export default defineConfig(() => {
       https,
       port: 5173,
       strictPort: true,
+      // Let the browser supply its current LAN hostname; localhost would break phones.
+      hmr: { clientPort: 5173, timeout: 30000, overlay: true },
+      watch: {
+        ignored: ['**/media/**', '**/.local/**', '**/dist/**'],
+        usePolling: env.DEV_WATCH_POLL === '1',
+        ...(env.DEV_WATCH_POLL === '1' ? { interval: 300 } : {}),
+      },
       proxy: {
         '/api': target,
         '/socket.io': { target, ws: true },

@@ -17,6 +17,8 @@ import {
   type Ack,
   type ServerEvents,
   type ClientEvents,
+  type QueueCommand,
+  type AvatarActionEvent,
 } from '../../packages/shared/src/index.js';
 
 test(
@@ -78,7 +80,7 @@ test(
       const socket: Socket<ServerEvents, ClientEvents> = io(base, {
         transports: sameOriginPolling ? ['polling', 'websocket'] : ['websocket'],
         extraHeaders: sameOriginPolling
-          ? { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin' }
+          ? { Cookie: cookie, Referer: `${base}/?room=test` }
           : { Cookie: cookie, Origin: 'http://localhost:5173' },
         reconnection: false,
         forceNew: true,
@@ -269,12 +271,44 @@ test(
       const sa = await connect(a.cookie!, true),
         sb = await connect(b.cookie!);
       assert.equal((await join(sb, roomId, 'invalid-token')).ok, false);
+      const deniedAction = await new Promise<Ack<AvatarActionEvent>>((resolve) =>
+        sb.emit('avatar:action', 'wave', resolve),
+      );
+      assert.equal(deniedAction.ok, false, 'An unjoined socket cannot animate users in a room');
       assert.equal((await join(sa, roomId)).ok, true);
       const guestJoin = await join(sb, roomId, token);
       assert.equal(guestJoin.ok, true);
       if (guestJoin.ok) assert.equal('inviteTokenHash' in guestJoin.data.room, false);
+      const receivedAction = new Promise<AvatarActionEvent>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Action was not broadcast')), 2000);
+        sb.once('avatar:action', (event) => {
+          clearTimeout(timer);
+          resolve(event);
+        });
+      });
+      const wave = await new Promise<Ack<AvatarActionEvent>>((resolve) =>
+        sa.emit('avatar:action', 'wave', resolve),
+      );
+      assert.equal(wave.ok, true);
+      const event = await receivedAction;
+      assert.equal(event.userId, a.data.id);
+      assert.equal(event.action, 'wave');
+      assert.equal(event.duration, 2800);
+      const repeatedAction = await new Promise<Ack<AvatarActionEvent>>((resolve) =>
+        sa.emit('avatar:action', 'clap', resolve),
+      );
+      assert.equal(repeatedAction.ok, false, 'Burst actions are rate limited');
+      const malformedAction = await new Promise<Ack<AvatarActionEvent>>((resolve) =>
+        sb.emit('avatar:action', { action: 'wave', userId: a.data.id } as never, resolve),
+      );
+      assert.equal(malformedAction.ok, false, 'Client cannot supply another user identity');
       const races = await Promise.all([claim(sa, 'A1'), claim(sb, 'A1')]);
       assert.equal(races.filter((v) => v.ok).length, 1);
+      const seatedSocket = races[1]?.ok ? sb : sa;
+      const invalidPose = await new Promise<Ack<AvatarActionEvent>>((resolve) =>
+        seatedSocket.emit('avatar:action', 'jump', resolve),
+      );
+      assert.equal(invalidPose.ok, false, 'Jumping is rejected while seated or moving to a seat');
       const unauthorized = await new Promise<Ack<RoomSnapshot>>((resolve) =>
         sb.emit(
           'playback:command',
@@ -309,6 +343,96 @@ test(
       );
       assert.equal(playing.ok, true);
       if (playing.ok) assert.equal(playing.data.playback.revision, 3);
+      const queue = (socket: Socket<ServerEvents, ClientEvents>, command: QueueCommand) =>
+        new Promise<Ack<RoomSnapshot>>((resolve) => socket.emit('queue:command', command, resolve));
+      const enqueued = await queue(sb, {
+        action: 'add',
+        url: 'https://youtu.be/dQw4w9WgXcQ',
+        title: 'QA YouTube',
+      });
+      assert.equal(enqueued.ok, true);
+      if (!enqueued.ok) throw new Error('queue add failed');
+      assert.equal(enqueued.data.playback.revision, 3);
+      assert.equal(enqueued.data.queue[0]?.addedBy, b.data.id);
+      const savedQueue = await db.room.findUniqueOrThrow({ where: { id: roomId } });
+      const savedState = new (await import('../../apps/server/src/room-state.js')).RoomState(
+        enqueued.data.room,
+      );
+      savedState.restoreMedia(savedQueue.mediaState);
+      assert.deepEqual(savedState.queue, enqueued.data.queue);
+      assert.equal(
+        (await queue(sa, { action: 'add', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' })).ok,
+        false,
+      );
+      assert.equal((await queue(sb, { action: 'next', revision: 3 })).ok, false);
+      assert.equal((await queue(sb, { action: 'media', mediaId: uploaded.id })).ok, false);
+      const queueId = enqueued.data.queue[0]!.id;
+      const voted = await queue(sa, { action: 'vote', id: queueId });
+      assert.ok(voted.ok && voted.data.queue[0]?.votes.includes(a.data.id));
+      const firstAdvance = await queue(sa, { action: 'next', revision: 3 });
+      assert.ok(firstAdvance.ok && firstAdvance.data.playback.playing);
+      const savedPlaying = await db.room.findUniqueOrThrow({ where: { id: roomId } });
+      savedState.restoreMedia(savedPlaying.mediaState);
+      assert.equal(savedState.playback.playing, true);
+      assert.equal(savedState.playback.sourceUrl, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+      assert.equal(savedState.queue.length, 0);
+      assert.equal((await queue(sa, { action: 'next', revision: 3 })).ok, false);
+      const photoResponse = await fetch(`${base}/api/media?title=QA%20photo`, {
+        method: 'POST',
+        headers: {
+          Cookie: a.cookie!,
+          Origin: 'http://localhost:5173',
+          'X-Cineverse-Client': 'web',
+          'Content-Type': 'image/png',
+        },
+        body: Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',
+          'base64',
+        ),
+      });
+      assert.equal(photoResponse.status, 201);
+      const photo = await photoResponse.json();
+      const photoPath = `/api/media/${photo.id}/stream`;
+      assert.equal((await fetch(base + photoPath, { headers: { Cookie: b.cookie! } })).status, 404);
+      const withPhoto = await queue(sa, { action: 'media', mediaId: photo.id });
+      assert.ok(withPhoto.ok);
+      if (!withPhoto.ok) throw new Error('photo queue failed');
+      const projected = await queue(sa, {
+        action: 'next',
+        revision: withPhoto.data.playback.revision,
+      });
+      assert.ok(
+        projected.ok &&
+          projected.data.playback.kind === 'image' &&
+          !projected.data.playback.playing,
+      );
+      const photoStream = await fetch(base + photoPath, { headers: { Cookie: b.cookie! } });
+      assert.equal(photoStream.status, 200);
+      assert.match(photoStream.headers.get('content-type')!, /image\/png/);
+      await photoStream.arrayBuffer();
+      assert.equal(
+        (
+          await request(
+            '/character',
+            { name: 'QA New Look', appearance: { ...defaultAppearance, outfit: 'rose' } },
+            b.cookie,
+            'PUT',
+          )
+        ).status,
+        200,
+      );
+      const refreshed = await new Promise<Ack<RoomSnapshot>>((resolve) =>
+        sb.emit('character:refresh', resolve),
+      );
+      assert.ok(
+        refreshed.ok &&
+          refreshed.data.participants.find((person) => person.userId === b.data.id)?.appearance
+            .outfit === 'rose',
+      );
+      // Restore a playing video for the reconnect assertions below.
+      await queue(sa, { action: 'add', url: 'https://example.com/reconnect.mp4' });
+      if (projected.ok)
+        await queue(sa, { action: 'next', revision: projected.data.playback.revision });
       assert.equal(
         (await fetch(base + streamPath, { headers: { Cookie: b.cookie! } })).status,
         404,

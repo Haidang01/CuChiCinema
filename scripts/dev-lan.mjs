@@ -43,6 +43,9 @@ console.log('\nCineVerse cho điện thoại cùng Wi-Fi:');
 addresses.forEach((row, index) => console.log(`  ${row.name}: ${urls[index]}`));
 console.log(`  Trên máy tính: ${scheme}://localhost:5173`);
 console.log('  API và PostgreSQL vẫn chỉ ở localhost. Dừng bằng Ctrl+C.');
+console.log(
+  '  Hot reload: giao diện tự cập nhật trên điện thoại; API tự khởi động lại khi sửa code/shared/.env.',
+);
 if (!https)
   console.log(
     '  HTTP dùng để kiểm tra web/phim. Micro cần npm run dev:lan:https và chứng chỉ được điện thoại tin cậy.',
@@ -56,6 +59,11 @@ const env = {
   APP_ORIGINS: extra,
   LAN_SHARE_ORIGIN: urls[0],
 };
+const commands = process.argv.includes('--web-only')
+  ? ['npm run dev -w @cineverse/web']
+  : process.argv.includes('--api-only')
+    ? ['npm run dev -w @cineverse/server']
+    : ['npm run dev -w @cineverse/server', 'npm run dev -w @cineverse/web'];
 const child = spawn(
   process.execPath,
   [
@@ -63,8 +71,7 @@ const child = spawn(
     '-k',
     '-n',
     'api,web',
-    'npm run dev -w @cineverse/server',
-    'npm run dev -w @cineverse/web',
+    ...commands,
   ],
   { stdio: 'inherit', env },
 );

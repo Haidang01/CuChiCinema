@@ -153,6 +153,16 @@ export default function App() {
     setMobileNav(false);
   }
   function enter(id: string, invite?: string) {
+    // Prime browser audio during the room-entry tap; actual media starts when the room timeline says play.
+    try {
+      const AudioContextClass = window.AudioContext;
+      if (AudioContextClass) {
+        const context = new AudioContextClass();
+        void context.resume().finally(() => void context.close());
+      }
+    } catch {
+      /* Browser media playback will report if it needs another tap. */
+    }
     setRoomId(id);
     setToken(invite);
     if (invite) sessionStorage.setItem(`cineverse-invite:${id}`, invite);
@@ -165,7 +175,7 @@ export default function App() {
   ];
   const inRoom = !!roomId && !!user?.character;
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${inRoom ? 'in-cinema' : ''}`}>
       <a href="#main-content" className="skip-link">
         Đến nội dung chính
       </a>
